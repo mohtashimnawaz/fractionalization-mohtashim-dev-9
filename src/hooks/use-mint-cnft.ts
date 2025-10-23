@@ -77,12 +77,10 @@ async function mintWithExistingTree(
     throw new Error('NEXT_PUBLIC_MERKLE_TREE_ADDRESS not configured. See TREE_SETUP_GUIDE.md');
   }
 
-  // Initialize UMI with Helius RPC
-  const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY;
+  // Initialize UMI with connection
+  // Note: We use the connection's RPC endpoint (no API key needed client-side)
   const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || 'devnet';
-  const endpoint = apiKey 
-    ? `https://${network}.helius-rpc.com/?api-key=${apiKey}`
-    : 'https://api.devnet.solana.com';
+  const endpoint = `https://api.${network}.solana.com`;
 
   const umi = createUmi(endpoint)
     .use(mplBubblegum())
@@ -126,7 +124,7 @@ async function mintWithExistingTree(
 }
 
 /**
- * Mint a compressed NFT using Helius Mint API (fallback)
+ * Mint a compressed NFT using Helius Mint API via our server-side route
  * This doesn't require wallet signature - Helius mints it for you
  */
 async function mintWithHeliusAPI(
@@ -134,58 +132,35 @@ async function mintWithHeliusAPI(
   walletAddress: string,
 ): Promise<{ signature: string; assetId: string }> {
   
-  const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY;
-  const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || 'devnet';
-  
-  if (!apiKey) {
-    throw new Error('Helius API key not configured');
-  }
-
-  const response = await fetch(`https://${network}.helius-rpc.com/?api-key=${apiKey}`, {
+  // Call our server-side API route which has the API key
+  const response = await fetch('/api/mint-cnft', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 'helius-mint',
-      method: 'mintCompressedNft',
-      params: {
-        name: params.name,
-        symbol: params.symbol,
-        owner: walletAddress,
-        description: params.description || `A compressed NFT: ${params.name}`,
-        attributes: [
-          {
-            trait_type: 'Type',
-            value: 'Compressed NFT',
-          },
-          {
-            trait_type: 'Created',
-            value: new Date().toISOString(),
-          },
-        ],
-        imageUrl: params.imageUrl || 'https://arweave.net/placeholder-image',
-        externalUrl: '',
-        sellerFeeBasisPoints: 500,
-      },
+      name: params.name,
+      symbol: params.symbol,
+      owner: walletAddress,
+      description: params.description || `A compressed NFT: ${params.name}`,
+      imageUrl: params.imageUrl || 'https://arweave.net/placeholder-image',
     }),
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Helius API error: ${response.status} - ${errorText}`);
+    const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(errorData.error || `API error: ${response.status}`);
   }
 
   const data = await response.json();
   
-  if (data.error) {
-    throw new Error(`Helius RPC error: ${data.error.message || JSON.stringify(data.error)}`);
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to mint cNFT');
   }
 
   return {
-    signature: data.result.signature,
-    assetId: data.result.assetId,
+    signature: data.signature,
+    assetId: data.assetId,
   };
 }
 
