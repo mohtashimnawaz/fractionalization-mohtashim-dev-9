@@ -18,17 +18,10 @@ interface WalletAdapterProviderProps {
  * Used alongside wallet-ui for Metaplex Bubblegum operations
  */
 export function WalletAdapterProvider({ children }: WalletAdapterProviderProps) {
-  // Get Helius RPC endpoint from environment
+  // Use public Solana RPC endpoint (API key is server-side only now)
   const endpoint = useMemo(() => {
-    const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY;
     const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || 'devnet';
-    
-    if (apiKey) {
-      return `https://${network}.helius-rpc.com/?api-key=${apiKey}`;
-    }
-    
-    // Fallback to public devnet
-    return 'https://api.devnet.solana.com';
+    return `https://api.${network}.solana.com`;
   }, []);
 
   // Configure wallet adapters
