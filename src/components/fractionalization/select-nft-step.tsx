@@ -8,7 +8,6 @@
 import { useState } from 'react';
 import { useUserCNFTs, useMintCNFT } from '@/hooks';
 import { useWallet } from '@/components/solana/solana-provider';
-import { useWallet as useWalletAdapter } from '@solana/wallet-adapter-react';
 import { useFractionalizationStore } from '@/stores';
 import { FractionalizationStep } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -22,7 +21,6 @@ import Image from 'next/image';
 
 export function SelectNFTStep() {
   const { account } = useWallet();
-  const walletAdapter = useWalletAdapter();
   const { data: nfts, isLoading, error, refetch } = useUserCNFTs(account?.address);
   const { formData, updateFormData, setStep } = useFractionalizationStore();
   const mintCNFT = useMintCNFT();
@@ -49,17 +47,13 @@ export function SelectNFTStep() {
     const useExistingTree = !!process.env.NEXT_PUBLIC_MERKLE_TREE_ADDRESS;
     
     if (useExistingTree) {
-      // Mode 1: Need wallet adapter for transaction signing
-      if (!walletAdapter.publicKey) {
+      // Mode 1: Need wallet for transaction signing
+      if (!account?.address) {
         alert('Please connect your wallet (Phantom or Solflare) to mint with transaction signing.');
         return;
       }
-      if (!walletAdapter.signTransaction) {
-        alert('Your wallet does not support transaction signing.');
-        return;
-      }
     } else {
-      // Mode 2: Need custom wallet for address
+      // Mode 2: Need wallet address
       if (!account?.address) {
         alert('Wallet not connected. Please connect your wallet to mint a cNFT.');
         return;
