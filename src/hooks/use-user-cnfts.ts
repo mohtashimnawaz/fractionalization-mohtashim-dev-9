@@ -1,9 +1,10 @@
 /**
- * Hook for fetching user's compressed NFTs via Helius DAS API
+ * Hook for fetching user's compressed NFTs via server-side API
+ * API key stays secure on the server
  */
 
 import { useQuery } from '@tanstack/react-query';
-import { getAssetsByOwner, CompressedNFT } from '@/lib/helius';
+import type { CompressedNFT } from '@/lib/helius';
 
 /**
  * Fetch compressed NFTs owned by the connected wallet
@@ -15,7 +16,21 @@ const fetchUserCNFTs = async (
 
   try {
     console.log('🔍 Fetching cNFTs for wallet:', walletAddress);
-    const assets = await getAssetsByOwner(walletAddress);
+    
+    // Call our server-side API route instead of Helius directly
+    const response = await fetch(`/api/helius?owner=${encodeURIComponent(walletAddress)}`);
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to fetch cNFTs');
+    }
+    
+    const assets: CompressedNFT[] = result.data;
     console.log(`✅ Found ${assets.length} compressed NFT(s)`);
     
     if (assets.length > 0) {

@@ -1,13 +1,20 @@
 /**
  * Hook for fractionalizing compressed NFTs
- * Uses Helius DAS API to fetch Merkle proof and passes it via remaining_accounts
+ * Fetches Merkle proof via server-side API and passes it via remaining_accounts
  */
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { PublicKey } from '@solana/web3.js';
-import { getAssetProof, proofToAccounts } from '@/lib/helius';
+import type { AssetProof } from '@/lib/helius';
 import { useWallet } from '@/components/solana/solana-provider';
+
+/**
+ * Convert proof to PublicKey array for transaction accounts
+ */
+function proofToAccounts(proof: AssetProof): PublicKey[] {
+  return proof.proof.map((node) => new PublicKey(node));
+}
 
 interface FractionalizeParams {
   nftMint: string; // cNFT asset ID
@@ -30,9 +37,22 @@ const fractionalizeCompressedNFT = async (
   walletAddress: string
 ): Promise<string> => {
   try {
-    // Step 1: Fetch Merkle proof from Helius
+    // Step 1: Fetch Merkle proof via server-side API
     console.log('Fetching Merkle proof for cNFT:', params.nftMint);
-    const proof = await getAssetProof(params.nftMint);
+    
+    const response = await fetch(`/api/helius?assetId=${encodeURIComponent(params.nftMint)}&proof=true`);
+    
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to fetch proof');
+    }
+    
+    const proof: AssetProof = result.data;
     
     if (!proof || !proof.proof) {
       throw new Error('Failed to fetch valid Merkle proof');

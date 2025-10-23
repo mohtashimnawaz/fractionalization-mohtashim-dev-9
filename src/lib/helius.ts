@@ -1,11 +1,12 @@
 import { PublicKey } from '@solana/web3.js';
 
-// Helius API configuration
-const HELIUS_API_KEY = process.env.NEXT_PUBLIC_HELIUS_API_KEY || '';
+// Helius API configuration - SERVER SIDE ONLY
+// This should only be used in API routes, never in client components
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY || '';
 const HELIUS_RPC_URL = `https://devnet.helius-rpc.com/?api-key=${HELIUS_API_KEY}`;
 
 if (!HELIUS_API_KEY) {
-  console.warn('NEXT_PUBLIC_HELIUS_API_KEY not set. Some Helius calls will fail.');
+  console.warn('⚠️ HELIUS_API_KEY not set. Helius API calls will fail.');
 }
 
 export interface DASAsset {
