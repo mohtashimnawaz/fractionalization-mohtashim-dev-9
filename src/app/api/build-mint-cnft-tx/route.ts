@@ -5,7 +5,6 @@ import { mintV1, mplBubblegum } from '@metaplex-foundation/mpl-bubblegum';
 import {
   publicKey as umiPublicKey,
   none,
-  generateSigner,
   signerIdentity,
   createSignerFromKeypair,
 } from '@metaplex-foundation/umi';
