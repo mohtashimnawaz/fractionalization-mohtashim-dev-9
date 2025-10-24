@@ -183,8 +183,7 @@ async function mintWithHeliusAPI(
 }
 
 export const useMintCNFT = () => {
-  const { account } = useWallet(); // wallet-ui for UI state
-  const walletAdapter = useWalletAdapter(); // wallet-adapter for signing
+  const walletAdapter = useWalletAdapter(); // Primary: wallet-adapter for signing
   const { connection } = useConnection();
   const queryClient = useQueryClient();
 
@@ -195,7 +194,6 @@ export const useMintCNFT = () => {
     mutationFn: async (params: MintCNFTParams) => {
       // Debug logging
       console.log('🔍 Wallet Debug Info:');
-      console.log('  wallet-ui account:', account?.address);
       console.log('  wallet-adapter publicKey:', walletAdapter.publicKey?.toBase58());
       console.log('  wallet-adapter connected:', walletAdapter.connected);
       console.log('  wallet-adapter connecting:', walletAdapter.connecting);
@@ -217,12 +215,12 @@ export const useMintCNFT = () => {
         return await mintWithExistingTree(params, connection, walletAdapter);
       } else {
         // Mode 2: Use Helius API (fallback)
-        if (!account?.address) {
+        if (!walletAdapter.publicKey) {
           throw new Error('Wallet not connected - please connect wallet first');
         }
 
         console.log('⚡ Using Helius Mint API - no signature required');
-        return await mintWithHeliusAPI(params, account.address);
+        return await mintWithHeliusAPI(params, walletAdapter.publicKey.toBase58());
       }
     },
     onSuccess: (data) => {

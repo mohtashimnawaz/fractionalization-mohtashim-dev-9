@@ -43,7 +43,11 @@ export function WalletSync() {
       if (walletAdapterWallet) {
         connect().catch((err) => {
           console.error('❌ Failed to auto-connect wallet-adapter:', err);
+          console.log('💡 Please manually connect your wallet using the wallet adapter');
         });
+      } else {
+        console.log('⚠️ No wallet selected in wallet-adapter');
+        console.log('💡 The wallet needs to be connected through wallet-adapter as well');
       }
     }
 

@@ -6,7 +6,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { WalletDropdown } from '@/components/wallet-dropdown';
+import { UnifiedWalletButton } from '@/components/unified-wallet-button';
 
 export function Navbar() {
   const pathname = usePathname();
@@ -49,7 +49,7 @@ export function Navbar() {
 
           {/* Wallet */}
           <div className="flex items-center space-x-4">
-            <WalletDropdown />
+            <UnifiedWalletButton />
           </div>
         </div>
 
