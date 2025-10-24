@@ -193,10 +193,24 @@ export const useMintCNFT = () => {
 
   return useMutation({
     mutationFn: async (params: MintCNFTParams) => {
+      // Debug logging
+      console.log('🔍 Wallet Debug Info:');
+      console.log('  wallet-ui account:', account?.address);
+      console.log('  wallet-adapter publicKey:', walletAdapter.publicKey?.toBase58());
+      console.log('  wallet-adapter connected:', walletAdapter.connected);
+      console.log('  wallet-adapter connecting:', walletAdapter.connecting);
+      
       if (useExistingTree) {
         // Mode 1: Use existing tree with user wallet signing
-        if (!walletAdapter.publicKey) {
-          throw new Error('Wallet not connected - please connect wallet first');
+        if (!walletAdapter.connected || !walletAdapter.publicKey) {
+          console.error('❌ Wallet adapter not connected!');
+          console.log('Wallet adapter state:', {
+            connected: walletAdapter.connected,
+            connecting: walletAdapter.connecting,
+            publicKey: walletAdapter.publicKey?.toBase58(),
+            wallet: walletAdapter.wallet?.adapter?.name,
+          });
+          throw new Error('Wallet not connected to adapter - please reconnect your wallet');
         }
 
         console.log('🔐 Using existing tree - user will sign transaction');
