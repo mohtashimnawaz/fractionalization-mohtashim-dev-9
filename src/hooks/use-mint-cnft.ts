@@ -143,11 +143,11 @@ async function mintWithExistingTree(
     }
 
     try {
-      // Deserialize the transaction
+      // Deserialize the transaction (it's a legacy Transaction, not VersionedTransaction)
       const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
-      const transaction = VersionedTransaction.deserialize(txBuffer);
+      const transaction = Transaction.from(txBuffer);
 
-      console.log('� Transaction deserialized, requesting wallet signature...');
+      console.log('📝 Transaction deserialized, requesting wallet signature...');
 
       // Request wallet to sign the transaction
       const signedTx = await solana.signTransaction(transaction);

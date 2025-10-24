@@ -69,19 +69,48 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Build and sign with temp keypair to get the instruction structure
-    const builtTx = await mintBuilder.buildAndSign(umi);
+    // Get the instruction items without building the full transaction
+    const ixs = mintBuilder.getInstructions();
     
-    console.log('✅ Built Bubblegum transaction');
+    console.log('✅ Got Bubblegum instruction');
 
     // Get fresh blockhash
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-    // Convert to web3.js
-    const web3Tx = toWeb3JsTransaction(builtTx);
+    // Convert UMI instructions to web3.js Transaction
+    // We need to manually build the transaction to avoid UMI's signing requirement
+    const transaction = new Transaction({
+      feePayer: new PublicKey(owner),
+      recentBlockhash: blockhash,
+    });
+
+    // Add each instruction - cast to access UMI instruction properties
+    interface UmiInstruction {
+      programAddress: string;
+      accounts?: Array<{ address: string; role: number }>;
+      data: Uint8Array;
+    }
     
-    // Serialize - VersionedTransaction.serialize() takes no arguments
-    const serializedTx = Buffer.from(web3Tx.serialize()).toString('base64');
+    for (const ix of ixs) {
+      const umiIx = ix as unknown as UmiInstruction;
+      const keys = (umiIx.accounts || []).map((acc) => ({
+        pubkey: new PublicKey(acc.address),
+        isSigner: acc.role === 1 || acc.role === 3, // 1 = signer, 3 = writable+signer
+        isWritable: acc.role === 2 || acc.role === 3, // 2 = writable, 3 = writable+signer
+      }));
+
+      transaction.add({
+        programId: new PublicKey(umiIx.programAddress),
+        keys,
+        data: Buffer.from(umiIx.data),
+      });
+    }
+    
+    // Serialize unsigned transaction
+    const serializedTx = transaction.serialize({
+      requireAllSignatures: false,
+      verifySignatures: false,
+    }).toString('base64');
 
     console.log('✅ Transaction serialized (unsigned) for client signature');
 
