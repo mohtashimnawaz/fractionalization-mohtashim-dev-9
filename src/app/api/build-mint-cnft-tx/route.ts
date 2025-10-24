@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
 
     console.log('📝 Building Bubblegum mint instruction...');
 
-    // Build the mint transaction
+    // Build the mint transaction with temp signer (needed by UMI)
     const mintBuilder = mintV1(umi, {
       leafOwner,
       merkleTree,
@@ -69,25 +69,25 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Build and sign with temp keypair (just to get the transaction structure)
+    // Build and sign with temp keypair to get the instruction structure
     const builtTx = await mintBuilder.buildAndSign(umi);
     
-    // Convert to web3.js VersionedTransaction
-    const versionedTx = toWeb3JsTransaction(builtTx);
+    console.log('✅ Built Bubblegum transaction');
 
-    console.log('✅ Transaction built successfully');
-
-    // Get fresh blockhash for the actual signing
+    // Get fresh blockhash
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-    // Serialize the versioned transaction
-    const serializedTx = Buffer.from(versionedTx.serialize()).toString('base64');
+    // Convert to web3.js
+    const web3Tx = toWeb3JsTransaction(builtTx);
+    
+    // Serialize - VersionedTransaction.serialize() takes no arguments
+    const serializedTx = Buffer.from(web3Tx.serialize()).toString('base64');
 
-    console.log('✅ Transaction serialized for client signature');
+    console.log('✅ Transaction serialized (unsigned) for client signature');
 
     return NextResponse.json({
       success: true,
-      message: 'Transaction ready for client signing',
+      message: 'Unsigned transaction ready for client signing',
       serializedTx,
       blockhash,
       lastValidBlockHeight,

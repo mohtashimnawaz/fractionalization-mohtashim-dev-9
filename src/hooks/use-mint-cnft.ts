@@ -120,43 +120,60 @@ async function mintWithExistingTree(
 
     console.log('✅ Got transaction from server');
 
-    // Step 2: Get wallet interface for signing
+    // Step 2: Get user's wallet to sign the transaction
     console.log('🖊️ Step 2: Requesting wallet signature...');
     
-    // Access the browser wallet directly via window
-    interface WindowWithSolana extends Window {
-      solana?: {
-        signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>;
-        isConnected: boolean;
-      };
+    // Access browser wallet
+    interface SolanaWallet {
+      signTransaction<T extends Transaction | VersionedTransaction>(transaction: T): Promise<T>;
+      signAllTransactions<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]>;
+      publicKey: PublicKey;
+      isConnected: boolean;
     }
-    const solana = (window as WindowWithSolana)?.solana;
     
-    if (!solana) {
-      throw new Error('No Solana wallet found. Please install Phantom or another Solana wallet.');
+    interface WindowWithSolana {
+      solana?: SolanaWallet;
+      phantom?: { solana?: SolanaWallet };
     }
-
-    // Deserialize the transaction
-    const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
-    const transaction = VersionedTransaction.deserialize(txBuffer);
+    
+    const solana = (window as unknown as WindowWithSolana)?.solana || (window as unknown as WindowWithSolana)?.phantom?.solana;
+    
+    if (!solana || !solana.isConnected) {
+      throw new Error('Please connect your Phantom or Solflare wallet first');
+    }
 
     try {
-      // Sign the transaction with the wallet
+      // Deserialize the transaction
+      const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
+      const transaction = VersionedTransaction.deserialize(txBuffer);
+
+      console.log('� Transaction deserialized, requesting wallet signature...');
+
+      // Request wallet to sign the transaction
       const signedTx = await solana.signTransaction(transaction);
       
-      console.log('✅ Transaction signed by wallet');
+      console.log('✅ Transaction signed by wallet!');
 
       // Send the signed transaction
       const connection = new Connection(endpoint, 'confirmed');
       const signature = await connection.sendRawTransaction(signedTx.serialize(), {
         skipPreflight: false,
         preflightCommitment: 'confirmed',
+        maxRetries: 3,
       });
 
       console.log('📡 Transaction sent:', signature);
 
       // Wait for confirmation
-      await connection.confirmTransaction(signature, 'confirmed');
+      const confirmation = await connection.confirmTransaction({
+        signature,
+        blockhash: buildData.blockhash,
+        lastValidBlockHeight: buildData.lastValidBlockHeight,
+      });
+
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+      }
 
       console.log('✅ Transaction confirmed!');
 
@@ -164,10 +181,10 @@ async function mintWithExistingTree(
         signature,
         assetId: 'pending-indexing',
       };
-    } catch (sendError) {
-      console.error('❌ Send error:', sendError);
+    } catch (signError) {
+      console.error('❌ Signing/sending error:', signError);
       throw new Error(
-        sendError instanceof Error ? sendError.message : 'Failed to sign or send transaction'
+        signError instanceof Error ? signError.message : 'Failed to sign or send transaction'
       );
     }
   } catch (error) {
