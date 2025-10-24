@@ -124,9 +124,8 @@ async function mintWithExistingTree(
     console.log('🖊️ Step 2: Sending transaction to wallet for signing...');
     
     // The transaction is already serialized as base64, send it directly
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const signature: string = await customWallet.client.rpc
-      .sendTransaction(buildData.serializedTx as any)
+      .sendTransaction(buildData.serializedTx as unknown as Parameters<typeof customWallet.client.rpc.sendTransaction>[0])
       .send();
 
     console.log('✅ Transaction signed and sent:', signature);
