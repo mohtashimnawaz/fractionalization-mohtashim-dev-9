@@ -124,7 +124,13 @@ async function mintWithExistingTree(
     console.log('🖊️ Step 2: Requesting wallet signature...');
     
     // Access the browser wallet directly via window
-    const solana = (window as any)?.solana;
+    interface WindowWithSolana extends Window {
+      solana?: {
+        signTransaction: (transaction: VersionedTransaction) => Promise<VersionedTransaction>;
+        isConnected: boolean;
+      };
+    }
+    const solana = (window as WindowWithSolana)?.solana;
     
     if (!solana) {
       throw new Error('No Solana wallet found. Please install Phantom or another Solana wallet.');
