@@ -120,29 +120,50 @@ async function mintWithExistingTree(
 
     console.log('✅ Got transaction from server');
 
-    // Step 2: Send transaction with wallet for signing
-    console.log('🖊️ Step 2: Sending transaction to wallet for signing...');
+    // Step 2: Get wallet interface for signing
+    console.log('🖊️ Step 2: Requesting wallet signature...');
     
-    // The transaction is already serialized as base64, send it directly
-    const signature: string = await customWallet.client.rpc
-      .sendTransaction(buildData.serializedTx as unknown as Parameters<typeof customWallet.client.rpc.sendTransaction>[0])
-      .send();
+    // Access the browser wallet directly via window
+    const solana = (window as any)?.solana;
+    
+    if (!solana) {
+      throw new Error('No Solana wallet found. Please install Phantom or another Solana wallet.');
+    }
 
-    console.log('✅ Transaction signed and sent:', signature);
+    // Deserialize the transaction
+    const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
+    const transaction = VersionedTransaction.deserialize(txBuffer);
 
-    // Step 3: Wait for confirmation
-    console.log('⏳ Step 3: Waiting for confirmation...');
+    try {
+      // Sign the transaction with the wallet
+      const signedTx = await solana.signTransaction(transaction);
+      
+      console.log('✅ Transaction signed by wallet');
 
-    // Poll for confirmation
-    const connection = new Connection(endpoint, 'confirmed');
-    await connection.confirmTransaction(signature, 'confirmed');
+      // Send the signed transaction
+      const connection = new Connection(endpoint, 'confirmed');
+      const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+        skipPreflight: false,
+        preflightCommitment: 'confirmed',
+      });
 
-    console.log('✅ Transaction confirmed!');
+      console.log('📡 Transaction sent:', signature);
 
-    return {
-      signature,
-      assetId: 'pending-indexing', // Will be indexed by Helius
-    };
+      // Wait for confirmation
+      await connection.confirmTransaction(signature, 'confirmed');
+
+      console.log('✅ Transaction confirmed!');
+
+      return {
+        signature,
+        assetId: 'pending-indexing',
+      };
+    } catch (sendError) {
+      console.error('❌ Send error:', sendError);
+      throw new Error(
+        sendError instanceof Error ? sendError.message : 'Failed to sign or send transaction'
+      );
+    }
   } catch (error) {
     console.error('❌ Mint error:', error);
     throw new Error(
