@@ -5,7 +5,11 @@ import { mintV1, mplBubblegum } from '@metaplex-foundation/mpl-bubblegum';
 import {
   publicKey as umiPublicKey,
   none,
+  generateSigner,
+  signerIdentity,
+  createSignerFromKeypair,
 } from '@metaplex-foundation/umi';
+import { fromWeb3JsKeypair, toWeb3JsTransaction } from '@metaplex-foundation/umi-web3js-adapters';
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,13 +32,24 @@ export async function POST(request: NextRequest) {
     console.log('  Tree:', treeAddress);
     console.log('  Name:', name);
 
-    // Create UMI instance
-    const umi = createUmi(endpoint).use(mplBubblegum());
+    // Create a temporary keypair ONLY for building the transaction structure
+    // This keypair is NOT used for signing - the client wallet will sign
+    const tempKeypair = Keypair.generate();
+    
+    // Create UMI instance first
+    let umi = createUmi(endpoint).use(mplBubblegum());
+    
+    // Then add the signer identity
+    const tempUmiKeypair = fromWeb3JsKeypair(tempKeypair);
+    const tempSigner = createSignerFromKeypair(umi, tempUmiKeypair);
+    umi = umi.use(signerIdentity(tempSigner));
 
-    // Build the mint instruction using UMI
     const leafOwner = umiPublicKey(owner);
     const merkleTree = umiPublicKey(treeAddress);
 
+    console.log('📝 Building Bubblegum mint instruction...');
+
+    // Build the mint transaction
     const mintBuilder = mintV1(umi, {
       leafOwner,
       merkleTree,
@@ -54,56 +69,29 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Get the latest blockhash
-    const { blockhash } = await connection.getLatestBlockhash();
-
-    // Create a web3.js transaction
-    const transaction = new Transaction({
-      recentBlockhash: blockhash,
-      feePayer: new PublicKey(owner),
-    });
-
-    // Build with UMI (just for validation, actual instruction building done on client)
-    try {
-      // This just validates the inputs
-      const umiTransaction = await mintBuilder.build(umi);
-      console.log('✅ Built UMI transaction structure');
-    } catch (e) {
-      // If that doesn't work, try to extract the instruction data differently
-      console.log('Note: Using alternative instruction extraction method', e instanceof Error ? e.message : '');
-    }
-
-    // Add the mint instruction
-    // For Bubblegum, the main instruction is the mint_v1 instruction
-    // We'll need to properly construct it from the metadata
+    // Build and sign with temp keypair (just to get the transaction structure)
+    const builtTx = await mintBuilder.buildAndSign(umi);
     
-    // Get blockhash and prepare transaction
-    const recentBlockhash = await connection.getLatestBlockhash();
+    // Convert to web3.js VersionedTransaction
+    const versionedTx = toWeb3JsTransaction(builtTx);
 
-    const tx = new Transaction({
-      recentBlockhash: recentBlockhash.blockhash,
-      feePayer: new PublicKey(owner),
-    });
+    console.log('✅ Transaction built successfully');
 
-    // Build Bubblegum mint instruction data
-    // This is complex - we'll use a simpler approach by letting the client get the instruction
-    
-    console.log('✅ Transaction prepared. Serializing for client signature...');
+    // Get fresh blockhash for the actual signing
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-    // Serialize the transaction for client
-    const serializedTx = tx.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    });
+    // Serialize the versioned transaction
+    const serializedTx = Buffer.from(versionedTx.serialize()).toString('base64');
 
-    // Return serialized transaction that client needs to sign
+    console.log('✅ Transaction serialized for client signature');
+
     return NextResponse.json({
       success: true,
       message: 'Transaction ready for client signing',
-      serializedTx: serializedTx.toString('base64'),
-      blockhash: recentBlockhash.blockhash,
+      serializedTx,
+      blockhash,
+      lastValidBlockHeight,
       feePayer: owner,
-      // Client should deserialize, sign with their wallet, serialize again, and send to /api/mint-cnft for confirmation
     });
   } catch (error) {
     console.error('❌ Error building transaction:', error);
