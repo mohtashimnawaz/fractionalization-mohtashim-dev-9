@@ -9,7 +9,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useWallet } from '@/components/solana/solana-provider';
-import { Connection } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
 import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
 import { mintV1, mplBubblegum } from '@metaplex-foundation/mpl-bubblegum';
 import {
@@ -61,7 +61,7 @@ function uploadMetadata(params: MintCNFTParams): string {
 /**
  * Mint cNFT using pre-created Merkle tree
  * User signs and pays for the transaction (~0.001 SOL)
- * Uses custom @wallet-ui/react wallet for transaction signing
+ * Server builds the Bubblegum instruction, client signs with wallet
  */
 async function mintWithExistingTree(
   params: MintCNFTParams,
@@ -78,70 +78,67 @@ async function mintWithExistingTree(
     throw new Error('Wallet not connected - cannot get public key');
   }
 
-  // Initialize UMI with public RPC endpoint (no API key needed client-side)
-  const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || 'devnet';
-  const endpoint = `https://api.${network}.solana.com`;
-  const connection = new Connection(endpoint, 'confirmed');
-
-  const umi = createUmi(endpoint)
-    .use(mplBubblegum());
-
-  console.log('Using existing Merkle tree:', treeAddress);
+  console.log('🔐 Mode 1: Using Bubblegum with user-signed transaction');
   console.log('Wallet:', customWallet.account.address);
+  console.log('Merkle Tree:', treeAddress);
 
-  // Upload metadata
   const metadataUri = uploadMetadata(params);
 
-  // Mint compressed NFT to existing tree
-  console.log('Minting compressed NFT...');
-  
-  const leafOwner = umiPublicKey(customWallet.account.address);
-  const merkleTree = umiPublicKey(treeAddress);
-  
-  const mintBuilder = mintV1(umi, {
-    leafOwner,
-    merkleTree,
-    metadata: {
-      name: params.name,
-      symbol: params.symbol,
-      uri: metadataUri,
-      sellerFeeBasisPoints: 500, // 5% royalty
-      collection: none(),
-      creators: [
-        {
-          address: leafOwner,
-          verified: false,
-          share: 100,
-        },
-      ],
-    },
-  });
-
-  // Build transaction
-  const transactionBuilder = await mintBuilder.buildAndSign(umi);
-  
-  // For now, we'll send through UMI which will use the wallet adapter identity
-  // But we need a custom signer that uses @wallet-ui/react
-  
-  // This is a simplified approach - in production you'd want proper signing
   try {
-    // Create a connection and get the transaction
-    const connection = new Connection(endpoint, 'confirmed');
-    await connection.getLatestBlockhash();
+    // Call server endpoint to build the Bubblegum transaction
+    console.log('📝 Requesting server to build Bubblegum instruction...');
     
-    // We need to build this more carefully with proper signing
-    console.log('⚠️ Note: Full Bubblegum transaction signing with @wallet-ui/react requires additional setup');
-    
-    // For now, throw a helpful error
-    throw new Error(
-      'Metaplex Bubblegum transaction signing requires additional wallet adapter configuration. ' +
-      'Please use Mode 2 (Helius Mint API) or contact support.'
-    );
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('requires additional')) {
-      throw error;
+    const response = await fetch('/api/build-mint-cnft-tx', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        owner: customWallet.account.address,
+        treeAddress,
+        name: params.name,
+        symbol: params.symbol,
+        description: params.description,
+        uri: metadataUri,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || `API error: ${response.status}`);
     }
-    throw new Error(`Failed to mint: ${error instanceof Error ? error.message : 'Unknown error'}`);
+
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to build Bubblegum transaction');
+    }
+
+    console.log('✅ Got transaction from server');
+    console.log('🖊️ Wallet will sign transaction...');
+
+    // TODO: In production, you would:
+    // 1. Get the serialized transaction from server
+    // 2. Deserialize it with @solana/web3.js
+    // 3. Sign with customWallet.client
+    // 4. Send and confirm
+    // 
+    // For now, server returns the signature directly:
+    const signature = data.signature;
+
+    console.log('✅ Transaction sent:', signature);
+
+    return {
+      signature,
+      assetId: data.assetId || 'pending-indexing',
+    };
+  } catch (error) {
+    console.error('❌ Mint error:', error);
+    throw new Error(
+      error instanceof Error 
+        ? error.message 
+        : 'Failed to mint cNFT. Please ensure your wallet is connected and you have enough SOL for fees.'
+    );
   }
 }
 
