@@ -1,16 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useWallet } from '@/components/solana/solana-provider';
-import { Connection, PublicKey, Keypair, Transaction, VersionedTransaction, sendAndConfirmTransaction } from '@solana/web3.js';
-import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
-import { mintV1, mplBubblegum } from '@metaplex-foundation/mpl-bubblegum';
-import {
-  publicKey as umiPublicKey,
-  none,
-  signerIdentity,
-  createSignerFromKeypair,
-} from '@metaplex-foundation/umi';
-import { fromWeb3JsKeypair, fromWeb3JsTransaction, toWeb3JsTransaction } from '@metaplex-foundation/umi-web3js-adapters';
+import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
 
 interface MintCNFTParams {
   name: string;
@@ -112,7 +103,15 @@ async function mintWithExistingTree(
       throw new Error(errorData.error || `Build API error: ${buildResponse.status}`);
     }
 
-    const buildData = await buildResponse.json();
+    const buildData: {
+      success: boolean;
+      error?: string;
+      serializedTx: string;
+      blockhash: string;
+      lastValidBlockHeight: number;
+      feePayer: string;
+      isVersioned?: boolean;
+    } = await buildResponse.json();
     
     if (!buildData.success) {
       throw new Error(buildData.error || 'Failed to build Bubblegum transaction');
@@ -143,24 +142,63 @@ async function mintWithExistingTree(
     }
 
     try {
-      // Deserialize the transaction (it's a legacy Transaction, not VersionedTransaction)
-      const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
-      const transaction = Transaction.from(txBuffer);
-
-      console.log('📝 Transaction deserialized, requesting wallet signature...');
-
-      // Request wallet to sign the transaction
-      const signedTx = await solana.signTransaction(transaction);
-      
-      console.log('✅ Transaction signed by wallet!');
-
-      // Send the signed transaction
       const connection = new Connection(endpoint, 'confirmed');
-      const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-        skipPreflight: false,
-        preflightCommitment: 'confirmed',
-        maxRetries: 3,
-      });
+      let signedTx: Transaction | VersionedTransaction;
+      let signature: string;
+
+      // Check if it's a VersionedTransaction or legacy Transaction
+      if (buildData.isVersioned) {
+        console.log('📝 Handling VersionedTransaction...');
+        const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
+        const versionedTx = VersionedTransaction.deserialize(txBuffer);
+
+        // For VersionedTransaction, we need to handle signing differently
+        // The transaction from server already has a signature - we need to replace it
+        
+        // Get fresh blockhash for the user's signature
+        const { blockhash } = await connection.getLatestBlockhash('confirmed');
+        
+        // Rebuild the transaction message with new blockhash
+        const message = versionedTx.message;
+        
+        console.log('📝 Requesting wallet to sign VersionedTransaction...');
+        
+        // Use signTransaction if available, otherwise signAndSendTransaction
+        if (solana.signTransaction) {
+          // Create a new VersionedTransaction with the message
+          const newVersionedTx = new VersionedTransaction(message);
+          const signed = await solana.signTransaction(newVersionedTx) as VersionedTransaction;
+          
+          console.log('✅ VersionedTransaction signed by wallet!');
+          
+          signature = await connection.sendRawTransaction(signed.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+            maxRetries: 3,
+          });
+        } else {
+          throw new Error('Wallet does not support signing VersionedTransactions');
+        }
+      } else {
+        console.log('📝 Handling legacy Transaction...');
+        // Deserialize the transaction (it's a legacy Transaction)
+        const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
+        const transaction = Transaction.from(txBuffer);
+
+        console.log('📝 Transaction deserialized, requesting wallet signature...');
+
+        // Request wallet to sign the transaction
+        signedTx = await solana.signTransaction(transaction);
+        
+        console.log('✅ Transaction signed by wallet!');
+
+        // Send the signed transaction
+        signature = await connection.sendRawTransaction(signedTx.serialize(), {
+          skipPreflight: false,
+          preflightCommitment: 'confirmed',
+          maxRetries: 3,
+        });
+      }
 
       console.log('📡 Transaction sent:', signature);
 

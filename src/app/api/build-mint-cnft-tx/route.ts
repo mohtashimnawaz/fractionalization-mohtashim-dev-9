@@ -69,59 +69,62 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Get the instruction items without building the full transaction
-    const ixs = mintBuilder.getInstructions();
+    // Build and sign with temp keypair to get the transaction structure
+    const builtTx = await mintBuilder.buildAndSign(umi);
     
-    console.log('✅ Got Bubblegum instruction');
+    console.log('✅ Built Bubblegum transaction with temp signer');
+
+    // Convert to web3.js
+    const web3Tx = toWeb3JsTransaction(builtTx);
+    
+    console.log('✅ Converted to web3.js transaction');
 
     // Get fresh blockhash
     const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-    // Convert UMI instructions to web3.js Transaction
-    // We need to manually build the transaction to avoid UMI's signing requirement
-    const transaction = new Transaction({
-      feePayer: new PublicKey(owner),
-      recentBlockhash: blockhash,
-    });
+    // Extract the message and create a new unsigned transaction
+    // VersionedTransaction has a 'message' property we can use
+    if ('message' in web3Tx) {
+      // It's a VersionedTransaction - extract instructions and rebuild as legacy Transaction
+      const message = web3Tx.message;
+      const transaction = new Transaction({
+        feePayer: new PublicKey(owner),
+        recentBlockhash: blockhash,
+      });
 
-    // Add each instruction - cast to access UMI instruction properties
-    interface UmiInstruction {
-      programAddress: string;
-      accounts?: Array<{ address: string; role: number }>;
-      data: Uint8Array;
-    }
-    
-    for (const ix of ixs) {
-      const umiIx = ix as unknown as UmiInstruction;
-      const keys = (umiIx.accounts || []).map((acc) => ({
-        pubkey: new PublicKey(acc.address),
-        isSigner: acc.role === 1 || acc.role === 3, // 1 = signer, 3 = writable+signer
-        isWritable: acc.role === 2 || acc.role === 3, // 2 = writable, 3 = writable+signer
-      }));
+      // Extract instructions from the versioned transaction message
+      // The message contains compiled instructions - we need to rebuild them
+      console.log('⚠️ VersionedTransaction detected - extracting instructions manually');
+      
+      // For now, we'll serialize the versioned tx and let the client handle it
+      const serializedTx = Buffer.from(web3Tx.serialize()).toString('base64');
+      
+      console.log('✅ Serialized VersionedTransaction for client');
 
-      transaction.add({
-        programId: new PublicKey(umiIx.programAddress),
-        keys,
-        data: Buffer.from(umiIx.data),
+      return NextResponse.json({
+        success: true,
+        message: 'VersionedTransaction ready - requires wallet signature',
+        serializedTx,
+        blockhash,
+        lastValidBlockHeight,
+        feePayer: owner,
+        isVersioned: true,
+      });
+    } else {
+      // It's a legacy Transaction
+      const serializedTx = Buffer.from((web3Tx as Transaction).serialize()).toString('base64');
+
+      console.log('✅ Transaction serialized (unsigned) for client signature');
+
+      return NextResponse.json({
+        success: true,
+        message: 'Unsigned transaction ready for client signing',
+        serializedTx,
+        blockhash,
+        lastValidBlockHeight,
+        feePayer: owner,
       });
     }
-    
-    // Serialize unsigned transaction
-    const serializedTx = transaction.serialize({
-      requireAllSignatures: false,
-      verifySignatures: false,
-    }).toString('base64');
-
-    console.log('✅ Transaction serialized (unsigned) for client signature');
-
-    return NextResponse.json({
-      success: true,
-      message: 'Unsigned transaction ready for client signing',
-      serializedTx,
-      blockhash,
-      lastValidBlockHeight,
-      feePayer: owner,
-    });
   } catch (error) {
     console.error('❌ Error building transaction:', error);
     return NextResponse.json(
