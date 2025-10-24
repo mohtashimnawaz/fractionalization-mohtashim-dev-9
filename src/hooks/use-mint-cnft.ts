@@ -1,7 +1,14 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useWallet } from '@/components/solana/solana-provider';
-import { Connection, PublicKey, Transaction, VersionedTransaction } from '@solana/web3.js';
+import { useWallet as useWalletAdapter, useConnection } from '@solana/wallet-adapter-react';
+import type { WalletContextState } from '@solana/wallet-adapter-react';
+import { Connection } from '@solana/web3.js';
+import { createUmi } from '@metaplex-foundation/umi-bundle-defaults';
+import { mplBubblegum, mintV1 } from '@metaplex-foundation/mpl-bubblegum';
+import { walletAdapterIdentity } from '@metaplex-foundation/umi-signer-wallet-adapters';
+import { publicKey as umiPublicKey } from '@metaplex-foundation/umi';
+import { none } from '@metaplex-foundation/umi';
 
 interface MintCNFTParams {
   name: string;
@@ -48,183 +55,82 @@ function uploadMetadata(params: MintCNFTParams): string {
  * Mint cNFT using pre-created Merkle tree with Metaplex Bubblegum
  * User signs and pays for the transaction (~0.001 SOL)
  * 
- * NOTE: This is a stub implementation. Full Bubblegum + wallet signing integration
- * requires UMI-compatible signing which is not yet implemented with @wallet-ui/react-gill.
- * 
- * For production, use Mode 2 (Helius Mint API) which is fully functional.
+ * Uses UMI + walletAdapterIdentity for proper wallet integration
  */
 async function mintWithExistingTree(
   params: MintCNFTParams,
-  customWallet: ReturnType<typeof useWallet>,
+  connection: Connection,
+  walletAdapter: WalletContextState,
 ): Promise<{ signature: string; assetId: string }> {
   
   const treeAddress = process.env.NEXT_PUBLIC_MERKLE_TREE_ADDRESS;
   
   if (!treeAddress) {
-    throw new Error('NEXT_PUBLIC_MERKLE_TREE_ADDRESS not configured');
+    throw new Error('NEXT_PUBLIC_MERKLE_TREE_ADDRESS not configured. Check TREE_SETUP_GUIDE.md');
   }
 
-  if (!customWallet.account?.address) {
+  if (!walletAdapter.publicKey) {
     throw new Error('Wallet not connected');
   }
 
-  if (!customWallet.client) {
-    throw new Error('Wallet client not available');
+  const apiKey = process.env.NEXT_PUBLIC_HELIUS_API_KEY;
+  if (!apiKey) {
+    throw new Error('NEXT_PUBLIC_HELIUS_API_KEY not configured');
   }
 
   const network = process.env.NEXT_PUBLIC_SOLANA_NETWORK || 'devnet';
-  const endpoint = `https://api.${network}.solana.com`;
+  const endpoint = `https://${network}.helius-rpc.com/?api-key=${apiKey}`;
 
   console.log('🔐 Mode 1: Metaplex Bubblegum with user wallet signing');
-  console.log('Wallet:', customWallet.account.address);
+  console.log('Wallet:', walletAdapter.publicKey.toBase58());
   console.log('Tree:', treeAddress);
 
   const metadataUri = uploadMetadata(params);
 
   try {
-    // Step 1: Request server to build the transaction
-    console.log('📝 Step 1: Requesting server to build Bubblegum transaction...');
-    
-    const buildResponse = await fetch('/api/build-mint-cnft-tx', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        owner: customWallet.account.address,
-        treeAddress,
+    // Create UMI instance with wallet adapter identity
+    const umi = createUmi(endpoint)
+      .use(mplBubblegum())
+      .use(walletAdapterIdentity(walletAdapter)); // KEY: This connects the wallet for signing
+
+    const leafOwner = umiPublicKey(walletAdapter.publicKey.toBase58());
+    const merkleTree = umiPublicKey(treeAddress);
+
+    console.log('📝 Building and signing transaction with UMI...');
+
+    // Build the mint transaction
+    const mintBuilder = mintV1(umi, {
+      leafOwner,
+      merkleTree,
+      metadata: {
         name: params.name,
         symbol: params.symbol,
-        description: params.description,
         uri: metadataUri,
-      }),
+        sellerFeeBasisPoints: 500, // 5% royalty
+        collection: none(),
+        creators: [
+          {
+            address: leafOwner,
+            verified: false,
+            share: 100,
+          },
+        ],
+      },
     });
 
-    if (!buildResponse.ok) {
-      const errorData = await buildResponse.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(errorData.error || `Build API error: ${buildResponse.status}`);
-    }
+    // This will trigger the wallet popup for user to sign and pay
+    console.log('�️ Requesting wallet signature...');
+    const result = await mintBuilder.sendAndConfirm(umi);
 
-    const buildData: {
-      success: boolean;
-      error?: string;
-      serializedTx: string;
-      blockhash: string;
-      lastValidBlockHeight: number;
-      feePayer: string;
-      isVersioned?: boolean;
-    } = await buildResponse.json();
-    
-    if (!buildData.success) {
-      throw new Error(buildData.error || 'Failed to build Bubblegum transaction');
-    }
+    const signature = Buffer.from(result.signature).toString('base64');
 
-    console.log('✅ Got transaction from server');
+    console.log('✅ Transaction confirmed!');
+    console.log('Signature:', signature);
 
-    // Step 2: Get user's wallet to sign the transaction
-    console.log('🖊️ Step 2: Requesting wallet signature...');
-    
-    // Access browser wallet
-    interface SolanaWallet {
-      signTransaction<T extends Transaction | VersionedTransaction>(transaction: T): Promise<T>;
-      signAllTransactions<T extends Transaction | VersionedTransaction>(transactions: T[]): Promise<T[]>;
-      publicKey: PublicKey;
-      isConnected: boolean;
-    }
-    
-    interface WindowWithSolana {
-      solana?: SolanaWallet;
-      phantom?: { solana?: SolanaWallet };
-    }
-    
-    const solana = (window as unknown as WindowWithSolana)?.solana || (window as unknown as WindowWithSolana)?.phantom?.solana;
-    
-    if (!solana || !solana.isConnected) {
-      throw new Error('Please connect your Phantom or Solflare wallet first');
-    }
-
-    try {
-      const connection = new Connection(endpoint, 'confirmed');
-      let signedTx: Transaction | VersionedTransaction;
-      let signature: string;
-
-      // Check if it's a VersionedTransaction or legacy Transaction
-      if (buildData.isVersioned) {
-        console.log('📝 Handling VersionedTransaction...');
-        const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
-        const versionedTx = VersionedTransaction.deserialize(txBuffer);
-
-        // For VersionedTransaction, we need to handle signing differently
-        // The transaction from server already has a signature - we need to replace it
-        
-        // Get fresh blockhash for the user's signature
-        const { blockhash } = await connection.getLatestBlockhash('confirmed');
-        
-        // Rebuild the transaction message with new blockhash
-        const message = versionedTx.message;
-        
-        console.log('📝 Requesting wallet to sign VersionedTransaction...');
-        
-        // Use signTransaction if available, otherwise signAndSendTransaction
-        if (solana.signTransaction) {
-          // Create a new VersionedTransaction with the message
-          const newVersionedTx = new VersionedTransaction(message);
-          const signed = await solana.signTransaction(newVersionedTx) as VersionedTransaction;
-          
-          console.log('✅ VersionedTransaction signed by wallet!');
-          
-          signature = await connection.sendRawTransaction(signed.serialize(), {
-            skipPreflight: false,
-            preflightCommitment: 'confirmed',
-            maxRetries: 3,
-          });
-        } else {
-          throw new Error('Wallet does not support signing VersionedTransactions');
-        }
-      } else {
-        console.log('📝 Handling legacy Transaction...');
-        // Deserialize the transaction (it's a legacy Transaction)
-        const txBuffer = Buffer.from(buildData.serializedTx, 'base64');
-        const transaction = Transaction.from(txBuffer);
-
-        console.log('📝 Transaction deserialized, requesting wallet signature...');
-
-        // Request wallet to sign the transaction
-        signedTx = await solana.signTransaction(transaction);
-        
-        console.log('✅ Transaction signed by wallet!');
-
-        // Send the signed transaction
-        signature = await connection.sendRawTransaction(signedTx.serialize(), {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
-        });
-      }
-
-      console.log('📡 Transaction sent:', signature);
-
-      // Wait for confirmation
-      const confirmation = await connection.confirmTransaction({
-        signature,
-        blockhash: buildData.blockhash,
-        lastValidBlockHeight: buildData.lastValidBlockHeight,
-      });
-
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-      }
-
-      console.log('✅ Transaction confirmed!');
-
-      return {
-        signature,
-        assetId: 'pending-indexing',
-      };
-    } catch (signError) {
-      console.error('❌ Signing/sending error:', signError);
-      throw new Error(
-        signError instanceof Error ? signError.message : 'Failed to sign or send transaction'
-      );
-    }
+    return {
+      signature,
+      assetId: 'pending-indexing', // Helius needs time to index
+    };
   } catch (error) {
     console.error('❌ Mint error:', error);
     throw new Error(
@@ -277,7 +183,9 @@ async function mintWithHeliusAPI(
 }
 
 export const useMintCNFT = () => {
-  const customWallet = useWallet();
+  const { account } = useWallet(); // wallet-ui for UI state
+  const walletAdapter = useWalletAdapter(); // wallet-adapter for signing
+  const { connection } = useConnection();
   const queryClient = useQueryClient();
 
   // Check if we should use existing tree (user-paid) or Helius API
@@ -287,20 +195,20 @@ export const useMintCNFT = () => {
     mutationFn: async (params: MintCNFTParams) => {
       if (useExistingTree) {
         // Mode 1: Use existing tree with user wallet signing
-        if (!customWallet.account?.address) {
+        if (!walletAdapter.publicKey) {
           throw new Error('Wallet not connected - please connect wallet first');
         }
 
         console.log('🔐 Using existing tree - user will sign transaction');
-        return await mintWithExistingTree(params, customWallet);
+        return await mintWithExistingTree(params, connection, walletAdapter);
       } else {
         // Mode 2: Use Helius API (fallback)
-        if (!customWallet.account?.address) {
+        if (!account?.address) {
           throw new Error('Wallet not connected - please connect wallet first');
         }
 
         console.log('⚡ Using Helius Mint API - no signature required');
-        return await mintWithHeliusAPI(params, customWallet.account.address);
+        return await mintWithHeliusAPI(params, account.address);
       }
     },
     onSuccess: (data) => {
